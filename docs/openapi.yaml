@@ -1,0 +1,1735 @@
+openapi: 3.0.3
+info:
+  title: Public Services Portal API
+  version: "1.0.0"
+  description: |
+    REST API behind the Public Services Portal, where citizens file service
+    applications and follow them to the last signature.
+
+    * **Authentication** — Sanctum bearer tokens. A token carries the abilities
+      of the role it was issued to (`applications:read`, `applications:write`,
+      `applications:decide`, `applications:assign`, `users:manage`, `audit:read`,
+      `catalog:manage`); row-level access is still decided by policies, so an
+      officer token cannot read another department's cases.
+    * **Roles** — `admin`, `officer`, `public`. The same service layer backs the
+      Inertia screens, so both entry points enforce identical rules.
+    * **Audit** — every status change, assignment, document read and failed
+      login is written to an immutable trail, readable through `/audit-logs`.
+    * **Workflow** — status changes follow the edges declared in
+      `config/portal.php`. An edge that does not exist returns HTTP 422 with
+      `code: workflow_violation`; the case does not move.
+
+    Anonymous tracking (`/track`) needs only the reference number and is
+    separately throttled; the applicant name stays masked until a citizen
+    number proves ownership.
+  contact:
+    name: Portal API
+  license:
+    name: MIT
+
+servers:
+  - url: http://services-portal/api/v1
+    description: Wamp.NET virtual host
+  - url: http://127.0.0.1:8000/api/v1
+    description: php artisan serve
+  - url: http://localhost/api/v1
+    description: Localhost document root
+
+tags:
+  - name: Auth
+    description: Register, sign in, token lifecycle
+  - name: Tracking
+    description: Anonymous "where is my document?" lookups
+  - name: Applications
+    description: Case filing and the citizen/staff register
+  - name: Workflow
+    description: Status transitions, assignment and timeline
+  - name: Documents
+    description: Private-disk paperwork and officer review
+  - name: Dashboard
+    description: Role-aware counters and officer workload
+  - name: Catalogue
+    description: Departments, services and statuses
+  - name: Administration
+    description: Users, roles and the compliance trail
+
+security:
+  - bearerAuth: []
+
+paths:
+  /meta:
+    get:
+      tags: [Tracking]
+      summary: API capabilities and the status vocabulary
+      security: []
+      operationId: getMeta
+      responses:
+        "200":
+          description: Reference prefix, polling interval and status codes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      name: { type: string, example: Public Services Portal }
+                      version: { type: string, example: v1 }
+                      reference_prefix: { type: string, example: PSP }
+                      poll_after_seconds: { type: integer, example: 15 }
+                      statuses:
+                        type: array
+                        items: { $ref: "#/components/schemas/StatusCode" }
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a citizen account
+      description: |
+        Registers the `public` role only — staff accounts are created by an
+        administrator. Rate limited to 5 requests per minute per IP.
+      security: []
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+            example:
+              name: Amina Yusuf
+              email: amina@example.com
+              password: Passw0rd123
+              password_confirmation: Passw0rd123
+              phone: "+1 555 0100"
+              national_id: "3000000001"
+              terms: true
+      responses:
+        "201":
+          description: Account created and a first token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Welcome aboard." }
+                  data: { $ref: "#/components/schemas/TokenBundle" }
+        "422":
+          description: Validation failed (duplicate citizen number, weak password, ...)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              example:
+                message: The citizen number must contain exactly 10 digits.
+                errors:
+                  national_id: [The citizen number must contain exactly 10 digits.]
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for a bearer token
+      description: |
+        The token is named after `device_name`, lives for the configured TTL
+        (7 days) and inherits the abilities of the account's role. A failed
+        attempt is recorded in the audit trail as `login_failed`.
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+            example:
+              email: admin@portal.local
+              password: password
+              device_name: postman
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Signed in. }
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/TokenBundle"
+                      - type: object
+                        properties:
+                          user: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Unknown email or wrong password
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+              example:
+                message: These credentials do not match our records.
+                code: http_error
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: The account behind the token
+      operationId: currentUser
+      responses:
+        "200":
+          description: Profile plus the derived role, abilities and department
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AuthenticatedUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Replace the current token with a fresh one
+      description: The old token is revoked in the same request.
+      operationId: refreshToken
+      responses:
+        "200":
+          description: New token bundle
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TokenBundle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the token used for the call
+      operationId: logout
+      responses:
+        "200":
+          description: Token deleted; other devices stay signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Signed out. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /track:
+    get:
+      tags: [Tracking]
+      summary: Anonymous status lookup by reference number
+      description: |
+        Throttled to 30 lookups per minute. The applicant name is always masked;
+        supplying the citizen number that owns the case sets
+        `meta.owner_verified` and unlocks the full timeline. Both hits and misses
+        are audited (`tracked`, `tracking_miss`).
+      security: []
+      operationId: trackApplication
+      parameters:
+        - in: query
+          name: reference
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9-]{6,32}$", example: PSP-2026-000123 }
+          description: Case reference, case-insensitive.
+        - in: query
+          name: national_id
+          required: false
+          schema: { type: string, pattern: "^[0-9]{10}$" }
+          description: Optional 10 digit citizen number for ownership proof.
+      responses:
+        "200":
+          description: Current state plus the visible part of the timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TrackingResult" }
+                  meta: { $ref: "#/components/schemas/TrackingMeta" }
+        "404":
+          description: No such reference
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+              example:
+                message: No application matches that tracking number.
+                code: not_found
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /applications:
+    get:
+      tags: [Applications]
+      summary: List the cases the caller may see
+      description: |
+        Scoping is decided by role: a citizen sees their own filings, an officer
+        sees the department's queue, an administrator sees everything. Filters
+        combine freely and the result is paginated.
+      operationId: listApplications
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/StatusCode" } }
+        - { name: department_id, in: query, schema: { type: integer } }
+        - { name: service_type_id, in: query, schema: { type: integer } }
+        - { name: assigned_officer_id, in: query, schema: { type: integer } }
+        - { name: priority, in: query, schema: { $ref: "#/components/schemas/Priority" } }
+        - { name: state, in: query, schema: { type: string, enum: [open, overdue, due_soon, closed, unassigned, mine] } }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Searches the reference, title and applicant name.
+        - { name: sort, in: query, schema: { type: string, enum: [newest, oldest, due, activity, priority] }, example: due }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: A page of cases
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Application" }
+                  meta:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      per_page: { type: integer }
+                      current_page: { type: integer }
+                      last_page: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Applications]
+      summary: File a new application
+      description: |
+        Creates the case in `submitted`, assigns the SLA due date from the
+        service's turnaround target and issues the tracking reference. A
+        `notes` field becomes the first entry of the conversation.
+      operationId: createApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StoreApplicationRequest" }
+            example:
+              service_type_id: 3
+              title: Renewal of my national identity card
+              description: My card expires next month and the counters require an appointment.
+              applicant_name: Amina Yusuf
+              applicant_phone: "+1 555 0100"
+              applicant_address: 12 Riverside Road, Block C, Apt 4
+              notes: I am available after 3pm for any check.
+      responses:
+        "201":
+          description: Case created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Application PSP-2026-000042 is on file." }
+                  data: { $ref: "#/components/schemas/Application" }
+        "403":
+          description: Token lacks the write ability, or the account is deactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /applications/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    get:
+      tags: [Applications]
+      summary: One case with its documents, comments and allowed moves
+      description: Reading a case as its owner increments `counts.views` and is audited.
+      operationId: showApplication
+      responses:
+        "200":
+          description: The case
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Application" }
+                  meta:
+                    type: object
+                    description: documents, comments, timeline and officers when the caller may see them
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Applications]
+      summary: Amend a case before it is worked
+      description: |
+        Only the applicant, while the case is still `submitted` and no document
+        has been verified. Staff may additionally change `priority`; a citizen
+        sending that field gets a validation error rather than a silent drop.
+      operationId: updateApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateApplicationRequest" }
+      responses:
+        "200":
+          description: Updated case
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Application" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: The case has moved on, or the payload is invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+              example:
+                message: An application can only be edited while it is still submitted.
+                code: workflow_violation
+    delete:
+      tags: [Applications]
+      summary: Withdraw a case
+      description: |
+        Soft deletes the filing so the audit trail keeps its history; the
+        reference stays searchable and reports `cancelled`.
+      operationId: withdrawApplication
+      responses:
+        "200":
+          description: Withdrawn
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "PSP-2026-000042 was withdrawn." }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /applications/{id}/status:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    post:
+      tags: [Workflow]
+      summary: Move the case to the next stage
+      description: |
+        The workflow engine checks the edge against `config/portal.php` and the
+        caller's role, then writes the status change, the timeline entry and the
+        audit row in one transaction. `note` is required whenever the move
+        changes the case; `internal_only` keeps it away from the citizen.
+        An unassigned officer taking the first step claims the case.
+      operationId: transitionApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransitionRequest" }
+            example:
+              status: under_review
+              note: Documents matched the registry entry; opening the file for review.
+              internal_only: false
+      responses:
+        "200":
+          description: New state, with the moves still available to this role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: The status was updated and written to the audit trail. }
+                  data: { $ref: "#/components/schemas/Application" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: Illegal edge, unknown status, or the case is already terminal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowError" }
+              example:
+                message: A submitted application cannot move directly to approved.
+                code: workflow_violation
+
+  /applications/{id}/status-options:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    get:
+      tags: [Workflow]
+      summary: The moves this caller may offer right now
+      operationId: statusOptions
+      responses:
+        "200":
+          description: Allowed edges for the current role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Status" }
+                  meta:
+                    type: object
+                    properties:
+                      current: { $ref: "#/components/schemas/StatusCode" }
+                      terminal: { type: boolean }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /applications/{id}/timeline:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    get:
+      tags: [Workflow]
+      summary: Poll the status history
+      description: |
+        Built for the 15 second live poll. Pass `since_id` to receive only what
+        changed, and read `meta.progress` for the percentage bar. Internal notes
+        are omitted for citizens.
+      operationId: applicationTimeline
+      parameters:
+        - { name: since_id, in: query, schema: { type: integer }, description: Return entries newer than this transition id. }
+      responses:
+        "200":
+          description: Timeline entries, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TimelineEntry" }
+                  meta:
+                    type: object
+                    properties:
+                      progress: { type: integer, example: 17 }
+                      stage: { type: integer, example: 2 }
+                      poll_after_seconds: { type: integer, example: 15 }
+                      latest_id: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /applications/{id}/assign:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    post:
+      tags: [Workflow]
+      summary: Hand the case to another officer
+      description: Admins may assign across departments; officers only within their own.
+      operationId: assignOfficer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignRequest" }
+            example:
+              officer_id: 4
+              reason: Registry checks need the transport desk.
+      responses:
+        "200":
+          description: Reassigned, audited as `officer_assigned`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: The case now belongs to Dana Officer. }
+                  data: { $ref: "#/components/schemas/Application" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /applications/{id}/comments:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    post:
+      tags: [Workflow]
+      summary: Add a message to the case
+      description: Staff may mark a message internal; the field is refused for citizens.
+      operationId: storeComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommentRequest" }
+            example:
+              body: Please bring the original receipt to the counter.
+              is_internal: false
+      responses:
+        "201":
+          description: Message stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Comment" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /applications/{id}/documents:
+    parameters:
+      - { $ref: "#/components/parameters/ApplicationId" }
+    post:
+      tags: [Documents]
+      summary: Upload paperwork for a case
+      description: |
+        Stored on the private `documents` disk (no public URL) with a sha256
+        checksum taken at upload. Accepted formats and the size limit come from
+        `config/portal.php`; a closed case no longer accepts paperwork.
+      operationId: storeDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [label, file]
+              properties:
+                label: { type: string, example: Proof of address }
+                file: { type: string, format: binary }
+                comment: { type: string, maxLength: 500 }
+      responses:
+        "201":
+          description: Document attached and audited as `document_uploaded`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Proof of address was uploaded. }
+                  data: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: Wrong format, too large, or the label is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              example:
+                message: The document must be smaller than 10 MB.
+                errors:
+                  file: [The document must be smaller than 10 MB.]
+
+  /documents/{id}/download:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    get:
+      tags: [Documents]
+      summary: Stream a stored file
+      description: |
+        The only way to read a document — the disk has no public URL. Every read
+        is audited as `document_downloaded` with the checksum it served.
+      operationId: downloadDocument
+      responses:
+        "200":
+          description: The file, as an attachment
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /documents/{id}/review:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    patch:
+      tags: [Documents]
+      summary: Accept or reject a document
+      description: A rejection must be explained, and the note stays staff-visible only when internal.
+      operationId: reviewDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewDocumentRequest" }
+            example:
+              status: rejected
+              review_note: The scan is unreadable at the edges.
+      responses:
+        "200":
+          description: Verdict stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /documents/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    delete:
+      tags: [Documents]
+      summary: Pull back an upload nobody has verified yet
+      operationId: destroyDocument
+      responses:
+        "200":
+          description: Removed from the private disk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: The file was removed. }
+        "403":
+          description: Already verified, or not your upload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+              example:
+                message: A verified document stays with the department.
+                code: http_error
+
+  /dashboard/stats:
+    get:
+      tags: [Dashboard]
+      summary: Counters for the signed-in role
+      description: |
+        Same numbers the Inertia dashboard renders — totals, open, overdue,
+        closed, due-soon, the status breakdown, per-department load, the 30 day
+        submission trend, unassigned work and the caller's own queue.
+      operationId: dashboardStats
+      responses:
+        "200":
+          description: Dashboard payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DashboardStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /dashboard/workload:
+    get:
+      tags: [Dashboard]
+      summary: Open, overdue and closed counts per officer
+      description: Staff only — a citizen token gets 403, not an empty report.
+      operationId: dashboardWorkload
+      responses:
+        "200":
+          description: One row per active officer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkloadRow" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /services:
+    get:
+      tags: [Catalogue]
+      summary: Published services
+      description: Citizens see `is_public` rows with the fee and turnaround target; staff also see hidden services.
+      security: []
+      operationId: listServices
+      responses:
+        "200":
+          description: Catalogue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ServiceType" }
+
+  /departments:
+    get:
+      tags: [Catalogue]
+      summary: Active departments
+      security: []
+      operationId: listDepartments
+      responses:
+        "200":
+          description: Departments with their SLA defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Department" }
+
+  /statuses:
+    get:
+      tags: [Catalogue]
+      summary: The workflow legend
+      security: []
+      operationId: listStatuses
+      responses:
+        "200":
+          description: Statuses in workflow order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Status" }
+
+  /roles:
+    get:
+      tags: [Administration]
+      summary: Roles with the department requirement flag
+      operationId: listRoles
+      responses:
+        "200":
+          description: Three roles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Role" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users:
+    get:
+      tags: [Administration]
+      summary: Search accounts
+      operationId: listUsers
+      parameters:
+        - { name: role, in: query, schema: { $ref: "#/components/schemas/RoleName" } }
+        - { name: department_id, in: query, schema: { type: integer } }
+        - { name: q, in: query, schema: { type: string }, description: Name or email fragment. }
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: per_page, in: query, schema: { type: integer, maximum: 100 } }
+      responses:
+        "200":
+          description: Page of accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Administration]
+      summary: Create a staff account
+      description: |
+        Emails are normalised to lower case so the login lookup is
+        deterministic, passwords are hashed by the model cast, and the creation
+        is audited as `user_created` with the actor's role.
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StoreUserRequest" }
+            example:
+              name: Dana Officer
+              email: dana.officer@portal.local
+              password: Passw0rd123
+              role_id: 2
+              department_id: 1
+              phone: "+1 555 2200"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Account created. }
+                  data: { $ref: "#/components/schemas/User" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /users/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/UserId" }
+    get:
+      tags: [Administration]
+      summary: One account
+      operationId: showUser
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [Administration]
+      summary: Change an account, its role or its state
+      description: |
+        Setting `is_active` to false revokes every token held by that account,
+        so a departure takes effect immediately on both the API and the UI. An
+        administrator cannot deactivate their own account.
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+            example:
+              is_active: false
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: Self-lockout attempt, or invalid payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              example:
+                message: You cannot deactivate your own account.
+                errors:
+                  is_active: [You cannot deactivate your own account.]
+    delete:
+      tags: [Administration]
+      summary: Deactivate an account
+      description: |
+        Staff are deactivated rather than deleted: their name has to stay
+        attached to every case and audit entry they produced.
+      operationId: deactivateUser
+      responses:
+        "200":
+          description: Account disabled and tokens revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Dana Officer was deactivated. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: Attempting to remove your own account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpError" }
+
+  /audit-logs:
+    get:
+      tags: [Administration]
+      summary: Read the compliance trail
+      description: |
+        Administrators see every entry. Officers only see rows about the cases
+        they can work, or about themselves — administration events such as
+        `user_created` never reach them.
+      operationId: listAuditLogs
+      parameters:
+        - { name: event, in: query, schema: { $ref: "#/components/schemas/AuditEvent" }, example: status_changed }
+        - { name: user_id, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Searches the reference, the actor and the event.
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: per_page, in: query, schema: { type: integer, maximum: 200 } }
+      responses:
+        "200":
+          description: Newest entries first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditLog" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit-logs/export:
+    get:
+      tags: [Administration]
+      summary: Bulk export for an audit request
+      description: Same filters and the same visibility rules as `/audit-logs`, capped at 5000 rows.
+      operationId: exportAuditLogs
+      parameters:
+        - { name: event, in: query, schema: { $ref: "#/components/schemas/AuditEvent" } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Exported rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditLog" }
+                  meta:
+                    type: object
+                    properties:
+                      exported: { type: integer }
+                      truncated_at: { type: integer, example: 5000 }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit-logs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer }
+        description: Audit entry id.
+    get:
+      tags: [Administration]
+      summary: One audit entry with its before/after values
+      operationId: showAuditLog
+      responses:
+        "200":
+          description: Entry
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AuditLog" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /departments/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/DepartmentId" }
+    put:
+      tags: [Administration]
+      summary: Rename a department or change its default SLA
+      operationId: updateDepartment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDepartmentRequest" }
+      responses:
+        "200":
+          description: Department updated and audited
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Department" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /services/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ServiceTypeId" }
+    put:
+      tags: [Administration]
+      summary: Change a service, its fee or its required paperwork
+      description: The service code stays stable so historical cases keep pointing at it.
+      operationId: updateService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateServiceRequest" }
+      responses:
+        "200":
+          description: Service updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ServiceType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Sanctum personal access token from `POST /auth/login` or
+        `POST /auth/register`. Send it as `Authorization: Bearer <token>`.
+
+  parameters:
+    ApplicationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+      description: Application id (not the reference number).
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    DepartmentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    ServiceTypeId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    Unauthorized:
+      description: Missing, expired or revoked token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HttpError" }
+          example:
+            message: Unauthenticated.
+            code: unauthenticated
+    Forbidden:
+      description: Role, ability or row-level policy refused the call
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HttpError" }
+          example:
+            message: This case belongs to another department.
+            code: http_error
+    NotFound:
+      description: Unknown id or a case outside the caller's scope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HttpError" }
+          example:
+            message: Resource not found.
+            code: not_found
+    ValidationFailed:
+      description: The payload failed validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ValidationError" }
+    TooManyRequests:
+      description: Rate limit reached (login 10/min, register 5/min, tracking 30/min, API 120/min)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/HttpError" }
+          example:
+            message: Too Many Requests.
+            code: http_error
+
+  schemas:
+    StatusCode:
+      type: string
+      description: Workflow statuses in stage order.
+      enum:
+        - submitted
+        - under_review
+        - documents_required
+        - in_progress
+        - on_hold
+        - pending_approval
+        - approved
+        - completed
+        - rejected
+        - cancelled
+
+    Priority:
+      type: string
+      enum: [low, normal, high, urgent]
+
+    RoleName:
+      type: string
+      enum: [admin, officer, public]
+
+    AuditEvent:
+      type: string
+      description: |
+        Written by `AuditLogger`; `password`, tokens and other credential keys
+        are stripped before the row is stored.
+      enum:
+        - login
+        - login_failed
+        - logout
+        - submitted
+        - status_changed
+        - officer_assigned
+        - document_uploaded
+        - document_downloaded
+        - document_reviewed
+        - document_deleted
+        - comment_added
+        - tracked
+        - tracking_miss
+        - user_created
+        - user_updated
+        - user_deactivated
+        - application_viewed
+        - created
+        - updated
+        - deleted
+
+    HttpError:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+        code:
+          type: string
+          enum: [http_error, unauthenticated, not_found, route_not_found, workflow_violation]
+
+    ValidationError:
+      type: object
+      required: [message, errors]
+      properties:
+        message:
+          type: string
+          description: The first error, ready to show the user.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    WorkflowError:
+      type: object
+      required: [message, code]
+      properties:
+        message: { type: string }
+        code: { type: string, example: workflow_violation }
+
+    TokenBundle:
+      type: object
+      properties:
+        token: { type: string, example: "1|Kq8f...plain text, shown once..." }
+        token_type: { type: string, example: Bearer }
+        abilities:
+          type: array
+          items: { type: string }
+          example: [applications:read, applications:write, audit:read]
+        expires_at: { type: string, format: date-time }
+
+    AuthenticatedUser:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            role: { $ref: "#/components/schemas/Role" }
+            abilities:
+              type: array
+              items: { type: string }
+            counts:
+              type: object
+              properties:
+                open_cases: { type: integer }
+                my_queue: { type: integer }
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, example: dana.officer@portal.local }
+        phone: { type: string, nullable: true }
+        national_id: { type: string, nullable: true, description: Returned only where the caller may see it. }
+        is_active: { type: boolean }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        role:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { $ref: "#/components/schemas/RoleName" }
+            label: { type: string }
+        department:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            code: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Role:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { $ref: "#/components/schemas/RoleName" }
+        display_name: { type: string, example: Case Officer }
+        level: { type: integer, example: 2 }
+        requires_department:
+          type: boolean
+          description: True for admin and officer; the user form requires a department when set.
+
+    Status:
+      type: object
+      properties:
+        id: { type: integer }
+        code: { $ref: "#/components/schemas/StatusCode" }
+        name: { type: string, example: Under review }
+        color: { type: string, example: indigo }
+        is_terminal: { type: boolean }
+
+    Department:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, example: Home Affairs }
+        code: { type: string, example: HA }
+        description: { type: string, nullable: true }
+        contact_email: { type: string, nullable: true }
+        default_sla_days: { type: integer, example: 20 }
+        is_active: { type: boolean }
+
+    ServiceType:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, example: National ID renewal }
+        code: { type: string, example: HA-ID-RENEW }
+        department: { $ref: "#/components/schemas/Department" }
+        description: { type: string, nullable: true }
+        fee: { type: number, example: 12 }
+        sla_days: { type: integer, example: 20 }
+        required_documents:
+          type: array
+          items: { type: string }
+        eligibility_notes:
+          type: array
+          items: { type: string }
+        is_public: { type: boolean }
+        requires_payment: { type: boolean }
+
+    Application:
+      type: object
+      properties:
+        id: { type: integer }
+        reference_number: { type: string, example: PSP-2026-000123 }
+        title: { type: string }
+        description: { type: string }
+        priority: { $ref: "#/components/schemas/Priority" }
+        stage:
+          type: integer
+          example: 2
+          description: Position inside the workflow, 1 to 7.
+        progress: { type: integer, example: 17, description: Percentage for the progress bar. }
+        status:
+          type: object
+          properties:
+            id: { type: integer }
+            code: { $ref: "#/components/schemas/StatusCode" }
+            name: { type: string }
+            color: { type: string }
+            is_terminal: { type: boolean }
+        service:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            code: { type: string }
+            fee: { type: number }
+        department:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            code: { type: string }
+        applicant:
+          type: object
+          properties:
+            name: { type: string }
+            phone: { type: string }
+            address:
+              type: string
+              description: Present only for the owner or staff.
+        citizen:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            email: { type: string }
+        officer:
+          type: object
+          nullable: true
+          description: Null while the case is unassigned.
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            email: { type: string, nullable: true }
+        timestamps:
+          type: object
+          properties:
+            submitted_at: { type: string, format: date-time, nullable: true }
+            due_at: { type: string, format: date-time, nullable: true }
+            closed_at: { type: string, format: date-time, nullable: true }
+            last_activity_at: { type: string, format: date-time, nullable: true }
+            created_at: { type: string, format: date-time }
+        sla:
+          type: object
+          properties:
+            days_remaining: { type: integer, nullable: true, description: Negative when the target date has passed. }
+            is_overdue: { type: boolean }
+        counts:
+          type: object
+          properties:
+            documents: { type: integer }
+            comments: { type: integer }
+            transitions: { type: integer }
+            views: { type: integer }
+        next_statuses:
+          type: array
+          description: Present when the caller has work rights on this case.
+          items:
+            type: object
+            properties:
+              code: { $ref: "#/components/schemas/StatusCode" }
+              name: { type: string }
+              color: { type: string }
+
+    TimelineEntry:
+      type: object
+      properties:
+        id: { type: integer }
+        status: { $ref: "#/components/schemas/StatusCode" }
+        status_name: { type: string }
+        color: { type: string }
+        from_status:
+          allOf:
+            - $ref: "#/components/schemas/StatusCode"
+          nullable: true
+        note:
+          type: string
+          nullable: true
+          description: Null for citizens when the move was marked internal.
+        actor:
+          type: object
+          properties:
+            name: { type: string, example: Dana Officer }
+            is_system: { type: boolean }
+        stage: { type: integer }
+        duration_seconds: { type: integer, description: Time spent in the previous stage. }
+        timestamp: { type: string, format: date-time }
+
+    Document:
+      type: object
+      properties:
+        id: { type: integer }
+        label: { type: string, example: Proof of address }
+        original_name: { type: string }
+        mime_type: { type: string }
+        size_kb: { type: integer }
+        checksum: { type: string, description: sha256 taken at upload. }
+        status: { type: string, enum: [pending, accepted, rejected] }
+        status_label: { type: string }
+        review_note:
+          type: string
+          nullable: true
+          description: Staff-only explanation of a rejection.
+        reviewed_at: { type: string, format: date-time, nullable: true }
+        uploaded_by:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+        created_at: { type: string, format: date-time }
+        download_url:
+          type: string
+          nullable: true
+          description: Authorized download route on the private disk; null when the caller may not read the file.
+
+    Comment:
+      type: object
+      properties:
+        id: { type: integer }
+        body: { type: string }
+        is_internal: { type: boolean }
+        author:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            role: { $ref: "#/components/schemas/RoleName" }
+        created_at: { type: string, format: date-time }
+
+    TrackingResult:
+      type: object
+      properties:
+        reference_number: { type: string }
+        service: { type: string }
+        department: { type: string }
+        title: { type: string }
+        status:
+          type: object
+          properties:
+            code: { $ref: "#/components/schemas/StatusCode" }
+            name: { type: string }
+            color: { type: string }
+        progress: { type: integer }
+        stage: { type: integer }
+        submitted_at: { type: string, format: date-time }
+        due_at: { type: string, format: date-time, nullable: true }
+        is_overdue: { type: boolean }
+        last_activity_at: { type: string, format: date-time, nullable: true }
+        state:
+          type: string
+          enum: [open, closed, withdrawn]
+          description: Present once the case has left the workflow.
+        applicant_name: { type: string, example: Amina Y***, description: Masked until ownership is proven. }
+
+    TrackingMeta:
+      type: object
+      properties:
+        owner_verified: { type: boolean }
+        poll_after_seconds: { type: integer, example: 15 }
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { $ref: "#/components/schemas/StatusCode" }
+              status_name: { type: string }
+              color: { type: string }
+              note: { type: string, nullable: true }
+              actor: { type: string }
+              timestamp: { type: string, format: date-time }
+
+    DashboardStats:
+      type: object
+      properties:
+        totals:
+          type: object
+          properties:
+            all: { type: integer }
+            open: { type: integer }
+            overdue: { type: integer }
+            closed: { type: integer }
+            due_soon: { type: integer, description: Open cases due within three days. }
+        by_status:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { $ref: "#/components/schemas/StatusCode" }
+              name: { type: string }
+              color: { type: string }
+              count: { type: integer }
+        by_department:
+          type: array
+          description: Empty for citizens.
+          items:
+            type: object
+            properties:
+              department: { type: string }
+              count: { type: integer }
+        submissions_last_30_days:
+          type: object
+          description: Day (YYYY-MM-DD) to count map.
+          additionalProperties: { type: integer }
+        unassigned:
+          type: integer
+          nullable: true
+          description: Null for citizens.
+        my_queue:
+          type: integer
+          nullable: true
+          description: Only for officers.
+
+    WorkloadRow:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        open_cases: { type: integer }
+        overdue_cases: { type: integer }
+        closed_cases: { type: integer }
+
+    AuditLog:
+      type: object
+      properties:
+        id: { type: integer }
+        event: { $ref: "#/components/schemas/AuditEvent" }
+        subject_type: { type: string, example: Application, description: Class basename of the row that changed. }
+        subject_id: { type: integer, nullable: true }
+        reference_number:
+          type: string
+          nullable: true
+          description: Case the entry belongs to; child records inherit their application's reference.
+        actor:
+          type: object
+          properties:
+            id: { type: integer, nullable: true }
+            name: { type: string, nullable: true, description: Kept even after the account is removed. }
+            role: { $ref: "#/components/schemas/RoleName" }
+        request:
+          type: object
+          properties:
+            method: { type: string }
+            url: { type: string }
+            ip: { type: string }
+            user_agent: { type: string }
+        old_values:
+          type: object
+          description: Before image with credentials removed.
+        new_values:
+          type: object
+          description: After image with credentials removed.
+        meta: { type: object }
+        created_at: { type: string, format: date-time }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 6 }
+        device_name: { type: string, maxLength: 120, example: postman }
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password, password_confirmation, phone, national_id, terms]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 160 }
+        email: { type: string, format: email }
+        password:
+          type: string
+          example: Passw0rd123
+          description: At least 8 characters with letters and numbers.
+        password_confirmation: { type: string, example: Passw0rd123 }
+        phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        national_id: { type: string, pattern: "^[0-9]{10}$" }
+        terms: { type: boolean, example: true }
+
+    StoreApplicationRequest:
+      type: object
+      required: [service_type_id, title, description, applicant_name, applicant_phone, applicant_address]
+      properties:
+        service_type_id: { type: integer, description: Must reference a published service. }
+        title: { type: string, minLength: 8, maxLength: 200 }
+        description: { type: string, minLength: 20, maxLength: 4000 }
+        applicant_name: { type: string, minLength: 3, maxLength: 160 }
+        applicant_phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        applicant_address: { type: string, minLength: 10, maxLength: 500 }
+        notes: { type: string, maxLength: 1000 }
+        priority:
+          $ref: "#/components/schemas/Priority"
+          description: Ignored for citizens; honoured for staff.
+
+    UpdateApplicationRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 8, maxLength: 200 }
+        description: { type: string, minLength: 20, maxLength: 4000 }
+        applicant_name: { type: string, minLength: 3, maxLength: 160 }
+        applicant_phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        applicant_address: { type: string, minLength: 10, maxLength: 500 }
+        priority:
+          allOf:
+            - $ref: "#/components/schemas/Priority"
+          description: Staff only — a citizen sending it gets 422.
+
+    TransitionRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/StatusCode" }
+        note: { type: string, minLength: 5, maxLength: 500, description: Required whenever the case changes stage. }
+        internal_only: { type: boolean, default: false }
+
+    AssignRequest:
+      type: object
+      required: [officer_id]
+      properties:
+        officer_id: { type: integer, description: Active user holding the Case Officer role. }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+        within_department: { type: boolean, description: Officers are pinned to their own department. }
+
+    CommentRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 3, maxLength: 2000 }
+        is_internal: { type: boolean, default: false, description: Staff only. }
+
+    ReviewDocumentRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [accepted, rejected] }
+        review_note: { type: string, minLength: 5, maxLength: 500, description: Required when rejecting. }
+
+    StoreUserRequest:
+      type: object
+      required: [name, email, password, role_id]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 160 }
+        email: { type: string, format: email, description: Normalised to lower case before storage. }
+        password: { type: string, description: Hashed by the model; at least 8 characters with letters and numbers. }
+        role_id: { type: integer }
+        department_id: { type: integer, description: Required for admin and officer accounts. }
+        phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        national_id: { type: string, pattern: "^[0-9]{10}$" }
+        is_active: { type: boolean, default: true }
+
+    UpdateUserRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 160 }
+        email: { type: string, format: email }
+        password: { type: string }
+        role_id: { type: integer }
+        department_id: { type: integer, nullable: true }
+        phone: { type: string, pattern: "^\\+?[0-9 ()-]{7,20}$" }
+        is_active: { type: boolean, description: False revokes every token of that account; never allowed for yourself. }
+
+    UpdateDepartmentRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 160 }
+        code: { type: string, maxLength: 32 }
+        description: { type: string, maxLength: 1000 }
+        contact_email: { type: string, format: email }
+        default_sla_days: { type: integer, minimum: 1, maximum: 365 }
+        is_active: { type: boolean }
+
+    UpdateServiceRequest:
+      type: object
+      minProperties: 1
+      properties:
+        department_id: { type: integer }
+        name: { type: string, minLength: 4, maxLength: 180 }
+        description: { type: string, maxLength: 3000 }
+        fee: { type: number, minimum: 0, maximum: 999999 }
+        sla_days: { type: integer, minimum: 1, maximum: 365 }
+        required_documents:
+          type: array
+          maxItems: 12
+          items: { type: string, minLength: 3, maxLength: 160 }
+        eligibility_notes:
+          type: array
+          maxItems: 12
+          items: { type: string, maxLength: 300 }
+        is_public: { type: boolean }
+        requires_payment: { type: boolean }

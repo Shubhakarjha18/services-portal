@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Public Services Portal — API reference</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; background: #f6f7f9; }
+    .topbar { padding: 14px 24px; background: #0f172a; color: #e2e8f0; font: 600 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
+    .topbar a { color: #93c5fd; font-weight: 500; margin-left: 10px; }
+    #spec-url { padding: 10px 24px; font: 12px/1.6 ui-sans-serif, system-ui, sans-serif; color: #475569; }
+    .swagger-ui .topbar { display: none; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    Public Services Portal · REST API v1
+    <a href="/api/v1/openapi.yaml">openapi.yaml</a>
+    <a href="/">portal</a>
+  </div>
+  <div id="spec-url">Contract served from <code>/api/v1/openapi.yaml</code> — the same file the Postman collection is generated from.</div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: '/api/v1/openapi.yaml',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      displayRequestDuration: true,
+      presets: [SwaggerUIBundle.presets.apis],
+      layout: 'BaseLayout',
+      docExpansion: 'list',
+      requestInterceptor: (req) => {
+        const token = window.localStorage.getItem('portal_api_token');
+        if (token && !/openapi\.yaml$/.test(req.url)) {
+          req.headers.Authorization = 'Bearer ' + token;
+        }
+        return req;
+      },
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,1668 @@
+{
+  "info": {
+    "name": "Public Services Portal — REST API v1",
+    "description": "Postman collection for the Laravel + Sanctum portal.\n\nHow to use it\n1. Set `base_url` (default `http://services-portal/api/v1` for the Wamp.NET vhost, or `http://127.0.0.1:8000/api/v1` for `php artisan serve`).\n2. Run **01 Auth → Login as administrator**. The test script stores the bearer token in the collection variable `token`, so every later request is authenticated automatically.\n3. Work through the folders in order: filing a case needs a citizen token, moving it needs an officer token, approving it needs the admin token.\n4. `docs/openapi.yaml` in the repo is the contract this collection was written against, and it is served at `/api/v1/openapi.yaml`.\n\nSeeded demo accounts (password `password`): `admin@portal.local`, `officer@portal.local`, `citizen@portal.local`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://services-portal/api/v1"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "service_type_id",
+      "value": "3"
+    },
+    {
+      "key": "application_id",
+      "value": "1"
+    },
+    {
+      "key": "reference",
+      "value": "PSP-2026-000001"
+    },
+    {
+      "key": "document_id",
+      "value": "1"
+    },
+    {
+      "key": "user_id",
+      "value": "2"
+    },
+    {
+      "key": "department_id",
+      "value": "1"
+    },
+    {
+      "key": "officer_role_id",
+      "value": "2"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Anonymous",
+      "item": [
+        {
+          "name": "Meta — capabilities and statuses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/meta",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "meta"
+              ]
+            },
+            "description": "Public. Returns the reference prefix, the live-poll interval and the workflow vocabulary."
+          },
+          "response": []
+        },
+        {
+          "name": "Track a case by reference",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('reference is masked, not exposed', () => {",
+                  "    pm.expect(body.data.applicant_name).to.include('***');",
+                  "});",
+                  "pm.test('no contact details leak', () => {",
+                  "    pm.expect(body.data).to.not.have.property('applicant_phone');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/track?reference={{reference}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "track"
+              ],
+              "query": [
+                {
+                  "key": "reference",
+                  "value": "{{reference}}"
+                }
+              ]
+            },
+            "description": "Throttled to 30 lookups per minute. The name stays masked until the optional citizen number proves ownership."
+          },
+          "response": []
+        },
+        {
+          "name": "Track with ownership proof",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/track?reference={{reference}}&national_id=3000000001",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "track"
+              ],
+              "query": [
+                {
+                  "key": "reference",
+                  "value": "{{reference}}"
+                },
+                {
+                  "key": "national_id",
+                  "value": "3000000001"
+                }
+              ]
+            },
+            "description": "Sets meta.owner_verified and reveals the full timeline."
+          },
+          "response": []
+        },
+        {
+          "name": "Track an unknown reference (404)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/track?reference=PSP-2026-999999",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "track"
+              ],
+              "query": [
+                {
+                  "key": "reference",
+                  "value": "PSP-2026-999999"
+                }
+              ]
+            },
+            "description": "Misses are audited as tracking_miss with the reference only — never with the guess that failed."
+          },
+          "response": []
+        },
+        {
+          "name": "Services catalogue",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/services",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "services"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Departments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "departments"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status legend",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/statuses",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "statuses"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "01 Auth",
+      "item": [
+        {
+          "name": "Register a citizen",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.token) {",
+                  "    pm.collectionVariables.set('citizen_token', json.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Amina Yusuf\",\n  \"email\": \"amina+{{random}}@example.com\",\n  \"password\": \"Passw0rd123\",\n  \"password_confirmation\": \"Passw0rd123\",\n  \"phone\": \"+1 555 0100\",\n  \"national_id\": \"3100000001\",\n  \"terms\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Rate limited to 5 per minute per IP. Password needs 8 characters with letters and numbers; the citizen number is 10 digits and unique."
+          },
+          "response": []
+        },
+        {
+          "name": "Login as administrator",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.data.token);",
+                  "pm.test('token carries the admin abilities', () => {",
+                  "    pm.expect(json.data.abilities).to.include('users:manage');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@portal.local\",\n  \"password\": \"password\",\n  \"device_name\": \"postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Stores the bearer token in the collection variable `token`. A failed attempt is written to the audit trail as login_failed."
+          },
+          "response": []
+        },
+        {
+          "name": "Login as case officer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.data.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"officer@portal.local\",\n  \"password\": \"password\",\n  \"device_name\": \"postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Replaces `token`, so the following requests run with officer scope. Officers get applications:read, applications:decide and audit:read — never users:manage."
+          },
+          "response": []
+        },
+        {
+          "name": "Login as citizen",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.data.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"citizen@portal.local\",\n  \"password\": \"password\",\n  \"device_name\": \"postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Who am I",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Profile, role, derived abilities and the counters shown in the header."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh the token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.data.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Issues a new token and revokes the one used for the call."
+          },
+          "response": []
+        },
+        {
+          "name": "Wrong password (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"citizen@portal.local\",\n  \"password\": \"not-the-password\",\n  \"device_name\": \"postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout (revokes this token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Run last: after this the stored token no longer authenticates. Other devices stay signed in."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 Applications",
+      "item": [
+        {
+          "name": "File an application",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data) {",
+                  "    pm.collectionVariables.set('application_id', json.data.id);",
+                  "    pm.collectionVariables.set('reference', json.data.reference_number);",
+                  "}",
+                  "pm.test('reference looks like PSP-YYYY-NNNNNN', () => {",
+                  "    pm.expect(json.data.reference_number).to.match(/^PSP-\\d{4}-\\d{6}$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service_type_id\": {{service_type_id}},\n  \"title\": \"Renewal of my national identity card\",\n  \"description\": \"My card expires next month and the counter requires an appointment before renewal.\",\n  \"applicant_name\": \"Amina Yusuf\",\n  \"applicant_phone\": \"+1 555 0100\",\n  \"applicant_address\": \"12 Riverside Road, Block C, Apt 4\",\n  \"notes\": \"Available after 3pm for any check.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            },
+            "description": "Sign in as a citizen first. Creates the case in `submitted`, sets the SLA due date from the service turnaround and returns the tracking reference."
+          },
+          "response": []
+        },
+        {
+          "name": "List the cases I may see",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications?state=open&sort=due&per_page=10",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications"
+              ],
+              "query": [
+                {
+                  "key": "state",
+                  "value": "open"
+                },
+                {
+                  "key": "sort",
+                  "value": "due"
+                },
+                {
+                  "key": "per_page",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Scoping is by role: a citizen sees their own filings, an officer the department queue, an admin everything. Other filters: status, department_id, service_type_id, assigned_officer_id, priority, q."
+          },
+          "response": []
+        },
+        {
+          "name": "Read one case",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}"
+              ]
+            },
+            "description": "Includes documents, comments, timeline and the moves the caller may still make."
+          },
+          "response": []
+        },
+        {
+          "name": "Amend a submitted case",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_phone\": \"+1 555 0144\",\n  \"applicant_address\": \"14 Riverside Road, Block A, Apt 9\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}"
+              ]
+            },
+            "description": "Only while the case is still `submitted` and nothing has been verified. Staff may also change priority; a citizen sending it gets 422."
+          },
+          "response": []
+        },
+        {
+          "name": "Withdraw a case",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}"
+              ]
+            },
+            "description": "Soft delete: the audit trail keeps its history and the reference stays searchable as cancelled."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 Workflow",
+      "item": [
+        {
+          "name": "Status options for my role",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status-options",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status-options"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Move to under review",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('stage advanced', () => pm.expect(json.data.stage).to.be.above(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"under_review\",\n  \"note\": \"Documents matched the registry entry; opening the file for review.\",\n  \"internal_only\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status"
+              ]
+            },
+            "description": "Sign in as the officer first. The transition, the timeline entry and the audit row are written in one transaction; the first officer to act claims the case."
+          },
+          "response": []
+        },
+        {
+          "name": "Ask for more paperwork",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"documents_required\",\n  \"note\": \"The proof of address is older than three months.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Keep a note internal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"on_hold\",\n  \"note\": \"Waiting for the external registry to answer.\",\n  \"internal_only\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status"
+              ]
+            },
+            "description": "internal_only hides the note from the citizen timeline."
+          },
+          "response": []
+        },
+        {
+          "name": "Illegal jump (422 workflow_violation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"approved\",\n  \"note\": \"Should be refused by the workflow engine.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status"
+              ]
+            },
+            "description": "An edge that does not exist in config/portal.php returns { message, code: workflow_violation } and the case does not move."
+          },
+          "response": []
+        },
+        {
+          "name": "Admin approval",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"approved\",\n  \"note\": \"Sign-off after the final check.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "status"
+              ]
+            },
+            "description": "Sign in as admin: pending_approval can only be decided by an administrator."
+          },
+          "response": []
+        },
+        {
+          "name": "Assign another officer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"officer_id\": 2,\n  \"reason\": \"Registry checks need the transport desk.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/assign",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "assign"
+              ]
+            },
+            "description": "Audited as officer_assigned. Officers may only move cases inside their own department."
+          },
+          "response": []
+        },
+        {
+          "name": "Poll the timeline",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/timeline?since_id=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "since_id",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "The dashboard polls this every 15 seconds; since_id keeps the payload to what changed."
+          },
+          "response": []
+        },
+        {
+          "name": "Add a message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Please bring the original receipt to the counter.\",\n  \"is_internal\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/comments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "comments"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 Documents",
+      "item": [
+        {
+          "name": "Upload paperwork",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data) {",
+                  "    pm.collectionVariables.set('document_id', json.data.id);",
+                  "    pm.test('checksum stored', () => pm.expect(json.data.checksum).to.have.lengthOf(64));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "label",
+                  "value": "Proof of address",
+                  "type": "text"
+                },
+                {
+                  "key": "comment",
+                  "value": "Utility bill from last month.",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/applications/{{application_id}}/documents",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications",
+                "{{application_id}}",
+                "documents"
+              ]
+            },
+            "description": "Pick a local PDF, JPG or DOCX (10 MB cap). It lands on the private `documents` disk with a sha256 checksum; the response only offers the authorized download route."
+          },
+          "response": []
+        },
+        {
+          "name": "Download (audited)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/documents/{{document_id}}/download",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "documents",
+                "{{document_id}}",
+                "download"
+              ]
+            },
+            "description": "The only path to the file. Each read writes document_downloaded with the checksum it served."
+          },
+          "response": []
+        },
+        {
+          "name": "Accept a document",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"accepted\",\n  \"review_note\": \"Clear scan, matches the applicant.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/documents/{{document_id}}/review",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "documents",
+                "{{document_id}}",
+                "review"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reject with an explanation",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"rejected\",\n  \"review_note\": \"The scan is unreadable at the edges.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/documents/{{document_id}}/review",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "documents",
+                "{{document_id}}",
+                "review"
+              ]
+            },
+            "description": "A rejection without a note returns 422 so the applicant always knows what to re-upload."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete an unverified upload",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/documents/{{document_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "documents",
+                "{{document_id}}"
+              ]
+            },
+            "description": "Possible only while the file is pending and only for the uploader; a verified document stays with the department."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 Dashboard",
+      "item": [
+        {
+          "name": "Role-aware counters",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dashboard/stats",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dashboard",
+                "stats"
+              ]
+            },
+            "description": "Totals, open, overdue, closed, due-soon, by_status, by_department, 30-day trend, unassigned and my_queue — identical to the numbers on the Inertia dashboard."
+          },
+          "response": []
+        },
+        {
+          "name": "Officer workload (staff only)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dashboard/workload",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dashboard",
+                "workload"
+              ]
+            },
+            "description": "Citizen token returns 403 rather than an empty report."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 Administration",
+      "item": [
+        {
+          "name": "Audit trail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/audit-logs?event=status_changed&per_page=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "event",
+                  "value": "status_changed"
+                },
+                {
+                  "key": "per_page",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Admins see everything. Officers only see rows about the cases they can work, or about themselves."
+          },
+          "response": []
+        },
+        {
+          "name": "One audit entry",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/audit-logs/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "audit-logs",
+                "1"
+              ]
+            },
+            "description": "Full before/after values with credential keys stripped."
+          },
+          "response": []
+        },
+        {
+          "name": "Export (capped at 5000)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/audit-logs/export?event=login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "audit-logs",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "event",
+                  "value": "login"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Roles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/roles",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "roles"
+              ]
+            },
+            "description": "requires_department tells the form when a department is mandatory."
+          },
+          "response": []
+        },
+        {
+          "name": "Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/users?role=officer&per_page=25",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "officer"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create a staff account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "application/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data) pm.collectionVariables.set('user_id', json.data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dana Officer\",\n  \"email\": \"dana.officer@portal.local\",\n  \"password\": \"Passw0rd123\",\n  \"role_id\": {{officer_role_id}},\n  \"department_id\": {{department_id}},\n  \"phone\": \"+1 555 2200\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Requires the admin role and the users:manage ability. The password is hashed by the model and the creation is audited as user_created."
+          },
+          "response": []
+        },
+        {
+          "name": "Deactivate an account (revokes tokens)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users/{{user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users",
+                "{{user_id}}"
+              ]
+            },
+            "description": "Their tokens disappear with the account, so a departure takes effect immediately. Deactivating yourself returns 422."
+          },
+          "response": []
+        },
+        {
+          "name": "Create a department",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Digital Registry\",\n  \"code\": \"DR\",\n  \"contact_email\": \"registry@portal.local\",\n  \"default_sla_days\": 15,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "departments"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Publish a service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"department_id\": {{department_id}},\n  \"name\": \"Digital signature certificate\",\n  \"code\": \"HA-DSIGN\",\n  \"fee\": 9,\n  \"sla_days\": 7,\n  \"required_documents\": [\"Proof of identity\"],\n  \"is_public\": true,\n  \"requires_payment\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/services",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "services"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update a service",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Digital signature registry\",\n  \"sla_days\": 10\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/services/{{service_type_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "services",
+                "{{service_type_id}}"
+              ]
+            },
+            "description": "The code stays stable so old cases keep pointing at the same service."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "07 Negative cases",
+      "item": [
+        {
+          "name": "No token (401 unauthenticated)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Citizen reading the register (scoped list)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applications",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            },
+            "description": "Run after Login as citizen — the list only ever contains the caller's own cases."
+          },
+          "response": []
+        },
+        {
+          "name": "Citizen opening admin routes (403)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown endpoint (404 route_not_found)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/nothing-here",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "nothing-here"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
